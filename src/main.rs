@@ -11,7 +11,6 @@ mod vc_mem;
 mod gpio;
 mod smi;
 
-use rand::{thread_rng, Rng};
 use smi::Smi;
 use vc_mem::VcMem;
 use gpio::{Gpio, GpioMode};
@@ -86,9 +85,9 @@ fn main() {
 
     let mut smi = Smi::new(
         8,
-        10, // ns
+        160, // ns
         1, // setup
-        12, // strobe
+        40, // strobe
         1, // hold,
         0, // pace
         DMA_CHAN as u8
@@ -109,8 +108,6 @@ fn main() {
     info!("Starting LED test...");
 
     loop {
-        // thread_rng().fill(&mut tx_buff[0..tx_buff_len(CHAN_LED_COUNT)]);
-
         info!("BLUE/RED");
         let leds = [0x0000FF, 0xFF0000];
         write_leds(&mut tx_buff, &leds);
@@ -118,7 +115,6 @@ fn main() {
         smi.start_transfer();
         smi.wait_transfer();
 
-        // thread::sleep(Duration::from_millis(100));
         thread::sleep(Duration::from_secs(1));
 
         info!("RED/BLUE");

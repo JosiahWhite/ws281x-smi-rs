@@ -10,12 +10,16 @@ mod dca;
 mod dcd;
 mod fd;
 
-use std::{cell::RefCell, fs::OpenOptions, ops::Range, ptr::{read_volatile, write_volatile}, rc::Rc, thread, time::Duration};
+use std::cell::RefCell;
+use std::fs::OpenOptions;
+use std::ops::Range;
+use std::rc::Rc;
 
 use log::debug;
 use memmap2::{MmapMut, MmapOptions};
 
-use crate::{dma::{Dma, DMA_CB_SRCE_INC, DMA_DEST_DREQ, DMA_WAIT_RESP}, r, rwm, w};
+use crate::{r, rwm, w};
+use crate::dma::{Dma, DMA_CB_SRCE_INC, DMA_DEST_DREQ, DMA_WAIT_RESP};
 use crate::vc_mem::VcMem;
 use crate::{
     CLK_BASE_ADDRESS,
@@ -29,8 +33,8 @@ const SMI_CS: usize   = 0x00;    // Control & status
 const SMI_L: usize    = 0x04;    // Transfer length
 const SMI_A: usize    = 0x08;    // Address
 const SMI_D: usize    = 0x0c;    // Data
-const SMI_DSR: usize = 0x10;    // Read settings device 0
-const SMI_DSW: usize = 0x14;    // Write settings device 0
+const SMI_DSR: usize  = 0x10;    // Read settings device 0
+const SMI_DSW: usize  = 0x14;    // Write settings device 0
 const SMI_DMC: usize  = 0x30;    // DMA control
 const SMI_DCS: usize  = 0x34;    // Direct control/status
 const SMI_DCA: usize  = 0x38;    // Direct address
@@ -63,12 +67,6 @@ use dcd::DCD;
 
 
 pub struct Smi {
-    width: usize,
-    ns: usize,
-    setup: usize,
-    strobe: usize,
-    hold: usize,
-
     dma: Dma,
     clk_map: MmapMut,
     smi_map: Rc<RefCell<MmapMut>>,
@@ -148,27 +146,22 @@ impl Smi {
         // set up the clocks for the smi peripheral
         let divi = (ns / 2) as u32;
 
+        // kill the clock and wait for it to stop
         w(clk_smi_ctl, CLK_PASSWD | (1 << 5));
-        debug!("waiting for clock to stop");
-        while r(clk_smi_ctl) & (1 << 7) != 0 {
-            thread::sleep(Duration::from_micros(10));
-        }
+        while r(clk_smi_ctl) & (1 << 7) != 0 {}
+
         // set clock source to plld_per which should be 500MHz
         w(clk_smi_ctl, CLK_PASSWD | 6);
-        thread::sleep(Duration::from_micros(10));
-        // set the divisor
-        w(clk_smi_div, CLK_PASSWD | 0xFFFF); //(divi << 12));
-        thread::sleep(Duration::from_micros(10));
-        // enable the clock
+
+        // set the divisor, the smi divisor is odd in that the bottom 8 bits are
+        // fixed to 0 and can't be set, so we need to shift the divisor by 8
+        w(clk_smi_div, CLK_PASSWD | (divi << 8));
+
+        // enable the clock and wait for it to be ready
         rwm(clk_smi_ctl, |reg| *reg |= CLK_PASSWD | (1 << 4));
-        thread::sleep(Duration::from_micros(10));
-        debug!("waiting for clock to stabilise");
-        while r(clk_smi_ctl) & (1 << 7) == 0 {
-            thread::sleep(Duration::from_micros(10));
-        }
-        thread::sleep(Duration::from_micros(100));
-        debug!("done setting up smi clock");
+        while r(clk_smi_ctl) & (1 << 7) == 0 {}
         
+        // clear any errors on the SMI peripheral
         if cs.get_seterr() {
             cs.set_seterr(true);
         }
@@ -192,12 +185,6 @@ impl Smi {
         }
 
         Smi {
-            width,
-            ns,
-            setup,
-            strobe,
-            hold,
-
             dma,
             clk_map,
             smi_map,
@@ -213,22 +200,6 @@ impl Smi {
             dca,
             dcd,
         }
-    }
-
-    pub fn change_freq(&mut self, setup: usize, strobe: usize, hold: usize) {
-        self.setup = setup;
-        self.strobe = strobe;
-        self.hold = hold;
-
-        self.cs.set_enable(false);
-        self.dsr.set_rsetup(setup as u8);
-        self.dsw.set_wsetup(setup as u8);
-        self.dsr.set_rstrobe(strobe as u8);
-        self.dsw.set_wstrobe(strobe as u8);
-        self.dsr.set_rhold(hold as u8);
-        self.dsw.set_whold(hold as u8);
-        self.cs.set_enable(true);
-        assert!(self.cs.get_seterr() == false);
     }
 
     pub fn setup_transfer(&mut self, source: &VcMem, range: Range<usize>) {
